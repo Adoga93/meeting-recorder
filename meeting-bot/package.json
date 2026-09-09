@@ -1,0 +1,17 @@
+{
+  "name": "meeting-bot",
+  "version": "1.0.0",
+  "description": "An automated meeting recorder bot",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "login": "node login.js",
+    "upload": "node upload_drive.js",
+    "auth-drive": "node upload_drive.js --auth-only"
+  },
+  "dependencies": {
+    "@googleapis/drive": "^22.0.0",
+    "googleapis": "^178.1.1",
+    "playwright": "^1.44.0"
+  }
+}

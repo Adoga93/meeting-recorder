@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Next.js
+.next/
+out/
+build/
+
+# Bot temporary profiles & browser user data
+meeting-bot/temp_login_profile/
+meeting-bot/test_profile/
+meeting-bot/user_data/
+**/test_profile/
+*.log
+
+# Sensitive credentials & Google authentication states
+**/state.json
+**/cookies.json
+**/state_backup.json
+**/cookies_backup.json
+**/*token*.json
+**/*secret*.json
+**/credentials*.json
+**/uploaded_recordings.json
+
+# Large media files & debug dumps
+*.mp4
+*.m4a
+*.webm
+*.avi
+meeting-bot/*.png
+meeting-bot/*.html
+meeting-bot/*.txt
+meeting-bot/recordings/*.mp4
+meeting-bot/recordings/*.png
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

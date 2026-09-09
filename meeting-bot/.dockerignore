@@ -1,0 +1,6 @@
+node_modules
+recordings
+temp_login_profile
+*.mp4
+*.png
+*.html
