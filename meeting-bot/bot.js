@@ -212,6 +212,21 @@ async function runBot() {
       // Tooltip didn't show up
     }
 
+    // Ensure microphone and camera are muted before joining
+    try {
+      console.log("🔇 Ensuring microphone and camera are muted...");
+      await page.keyboard.press('Control+d'); // Google Meet hotkey to mute mic
+      await page.waitForTimeout(500);
+      await page.keyboard.press('Control+e'); // Google Meet hotkey to turn off camera
+      await page.waitForTimeout(500);
+
+      const micBtn = page.locator('div[role="button"][aria-label*="turn off microphone" i], button[aria-label*="turn off microphone" i], [aria-label*="microphone" i][data-is-muted="false"]').first();
+      if (await micBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await micBtn.click();
+        console.log("🔇 Clicked mute microphone button.");
+      }
+    } catch (muteErr) {}
+
     // 2. Click "Ask to Join", "Join now", "Join here too", or "Switch here"
     // Use .first() to prevent Playwright strict mode violations
     const joinButton = page.locator(
@@ -232,6 +247,15 @@ async function runBot() {
     const leaveButtonSelector = 'button[aria-label="Leave call"], button[aria-label="Leave meeting"]';
     await page.waitForSelector(leaveButtonSelector, { timeout: 300000 }); // Wait up to 5 minutes
     console.log("🎉 Successfully Admitted to the meeting!");
+
+    // Double check mic is muted inside the call room
+    try {
+      const inCallMicUnmuted = page.locator('button[aria-label*="turn off microphone" i]').first();
+      if (await inCallMicUnmuted.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await page.keyboard.press('Control+d');
+        console.log("🔇 Muted microphone inside meeting room.");
+      }
+    } catch (e) {}
 
   } catch (error) {
     console.error("❌ Failed during the join sequence:", error.message);

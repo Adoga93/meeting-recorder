@@ -43,3 +43,5 @@ meeting-bot/recordings/*.png
 Thumbs.db
 .vscode/
 .idea/
+
+*.exe

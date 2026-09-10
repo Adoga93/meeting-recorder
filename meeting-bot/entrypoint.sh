@@ -10,11 +10,15 @@ echo "🔊 Starting PulseAudio Server..."
 pulseaudio -D --exit-idle-time=-1 --disallow-exit --realtime=no --log-target=stderr
 sleep 2
 
-# 3. Create virtual speaker (Null Sink) and capture loopback
+# 3. Create virtual speaker (Null Sink) for meeting playback
 echo "🎙️ Configuring Virtual Sound devices..."
 pactl load-module module-null-sink sink_name=Virtual_Speaker sink_properties=device.description="Virtual_Speaker"
 pactl set-default-sink Virtual_Speaker
-pactl load-module module-virtual-source source_name=Virtual_Mic master=Virtual_Speaker.monitor
+
+# Create a separate isolated silent sink for the microphone (prevents feedback loop and beeping)
+pactl load-module module-null-sink sink_name=Silent_Mic_Sink sink_properties=device.description="Silent_Mic_Sink"
+pactl load-module module-virtual-source source_name=Virtual_Mic master=Silent_Mic_Sink.monitor
+pactl set-source-mute Virtual_Mic 1
 sleep 1
 
 # 4. Start the recording bot
