@@ -4,20 +4,15 @@ import path from 'path';
 
 export async function GET() {
   try {
-    const recordingsDir = 'C:\\Users\\user\\Documents\\antigravity\\quick-raman\\meeting-bot\\recordings';
-
-    // Ensure recordings directory exists
-    if (!fs.existsSync(recordingsDir)) {
-      return NextResponse.json({ recordings: [] });
+    const botPath = process.env.BOT_PATH || path.resolve(process.cwd(), '../meeting-bot');
+    const recordingsDir = path.join(botPath, 'recordings');
+    const registryPath = path.join(botPath, 'uploaded_recordings.json');
+    let mediaFiles = [];
+    if (fs.existsSync(recordingsDir)) {
+      const files = fs.readdirSync(recordingsDir);
+      mediaFiles = files.filter(file => file.endsWith('.mp4') || file.endsWith('.webm'));
     }
 
-    // Read files from the recordings folder
-    const files = fs.readdirSync(recordingsDir);
-
-    // Filter files (we only want actual video recordings, and exclude things like debug screenshots)
-    const mediaFiles = files.filter(file => file.endsWith('.mp4') || file.endsWith('.webm'));
-
-    const registryPath = 'C:\\Users\\user\\Documents\\antigravity\\quick-raman\\meeting-bot\\uploaded_recordings.json';
     let driveRegistry = {};
     if (fs.existsSync(registryPath)) {
       try {

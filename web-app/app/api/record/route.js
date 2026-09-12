@@ -12,12 +12,11 @@ export async function POST(request) {
 
     console.log(`🤖 Backend starting recording bot: ${meetingUrl} with name "${botName}"`);
 
-    // Hardcode absolute forward-slash Windows path to ensure WSL2/Docker Desktop parses it perfectly
-    const botPath = "C:/Users/user/Documents/antigravity/quick-raman/meeting-bot";
-    const recordingsPath = `${botPath}/recordings`;
+    const botPath = process.env.BOT_PATH || path.resolve(process.cwd(), '../meeting-bot');
+    const recordingsPath = path.join(botPath, 'recordings');
     
     // Command to launch the Docker container in the background
-    const dockerCmd = `docker run --rm -d -v "${botPath}/bot.js:/app/bot.js" -v "${recordingsPath}:/app/recordings" -e MEETING_URL="${meetingUrl}" -e BOT_NAME="${botName}" meeting-bot`;
+    const dockerCmd = `docker run --rm -d -v "${path.join(botPath, 'bot.js')}:/app/bot.js" -v "${recordingsPath}:/app/recordings" -e MEETING_URL="${meetingUrl}" -e BOT_NAME="${botName}" meeting-bot`;
 
     console.log(`Executing: ${dockerCmd}`);
 

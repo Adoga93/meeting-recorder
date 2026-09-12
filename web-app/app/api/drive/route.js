@@ -3,8 +3,8 @@ import { exec } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 
-const botPath = "C:/Users/user/Documents/antigravity/quick-raman/meeting-bot";
-const registryPath = `${botPath}/uploaded_recordings.json`;
+const botPath = process.env.BOT_PATH || path.resolve(process.cwd(), '../meeting-bot');
+const registryPath = path.join(botPath, 'uploaded_recordings.json');
 
 export async function GET() {
   try {
