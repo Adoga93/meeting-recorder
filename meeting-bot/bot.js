@@ -17,6 +17,13 @@ async function runBot() {
     await runZoomBot();
     return; 
   }
+
+  if (MEETING_URL.includes("teams.microsoft.com") || MEETING_URL.includes("teams.live.com")) {
+    console.log("⚡ Route Match: Microsoft Teams. Redirecting execution to teams.js runner...");
+    const runTeamsBot = require('./teams.js');
+    await runTeamsBot();
+    return;
+  }
   
   // -- Otherwise, default to Google Meet automation --
   console.log("==================================================");
