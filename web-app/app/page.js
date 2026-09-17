@@ -31,29 +31,14 @@ export default function Dashboard() {
   const [successMessage, setSuccessMessage] = useState("");
   const [uploadingFile, setUploadingFile] = useState(null);
   const [isUploadingAll, setIsUploadingAll] = useState(false);
-
-  // Live active recordings state
   const [activeRecordings, setActiveRecordings] = useState([]);
+  const [calendarEvents, setCalendarEvents] = useState([]);
 
-  // Calendar Sync List
-  const [calendarEvents, setCalendarEvents] = useState([
-    {
-      id: "cal-1",
-      title: "Product Roadmap Review",
-      time: "Today, 2:00 PM - 2:45 PM",
-      platform: "zoom",
-      url: "https://zoom.us/j/987654321",
-      autoRecord: true,
-    },
-    {
-      id: "cal-2",
-      title: "Client Onboarding: Tech Stack",
-      time: "Tomorrow, 10:00 AM - 11:00 AM",
-      platform: "google_meet",
-      url: "https://meet.google.com/abc-def-ghi",
-      autoRecord: false,
-    }
-  ]);
+  // Today's Master Schedule state
+  const [todaySchedule, setTodaySchedule] = useState([]);
+  const [scheduleMode, setScheduleMode] = useState('manual');
+  const [isFetchingSchedule, setIsFetchingSchedule] = useState(false);
+  const [dispatchingSessionId, setDispatchingSessionId] = useState(null);
 
   // Past Recordings Library
   const [recordings, setRecordings] = useState([]);
@@ -68,6 +53,67 @@ export default function Dashboard() {
       setPlatform("teams");
     }
   }, [meetingUrl]);
+
+  // --- FETCH TODAY'S MASTER SCHEDULE ---
+  const fetchSchedule = async () => {
+    try {
+      setIsFetchingSchedule(true);
+      const response = await fetch('/api/schedule');
+      const data = await response.json();
+      if (data.classes) {
+        setTodaySchedule(data.classes);
+      }
+      if (data.mode) {
+        setScheduleMode(data.mode);
+      }
+    } catch (err) {
+      console.error("Failed fetching schedule:", err);
+    } finally {
+      setIsFetchingSchedule(false);
+    }
+  };
+
+  const handleToggleMode = async (newMode) => {
+    try {
+      setScheduleMode(newMode);
+      await fetch('/api/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set_mode', mode: newMode })
+      });
+    } catch (err) {
+      console.error("Failed toggling mode:", err);
+    }
+  };
+
+  const handleDispatchClass = async (cls) => {
+    try {
+      setDispatchingSessionId(cls.sessionId);
+      setErrorMessage("");
+      setSuccessMessage("");
+
+      const response = await fetch('/api/record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meetingUrl: cls.meetingUrl,
+          botName: `PAS Tutors (${cls.studentName})`
+        })
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setSuccessMessage(`🚀 Recorder Bot launched for ${cls.studentName} (${cls.subject})!`);
+        fetchSchedule();
+      } else {
+        setErrorMessage(data.error || "Failed to dispatch bot.");
+      }
+    } catch (err) {
+      setErrorMessage("Dispatch error: " + err.message);
+    } finally {
+      setDispatchingSessionId(null);
+    }
+  };
 
   // --- FETCH PAST RECORDINGS FROM BACKEND ---
   const fetchRecordings = async () => {
@@ -84,8 +130,12 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchRecordings();
-    // Poll for new recordings every 10 seconds
-    const interval = setInterval(fetchRecordings, 10000);
+    fetchSchedule();
+    // Poll for new recordings & schedule updates every 10 seconds
+    const interval = setInterval(() => {
+      fetchRecordings();
+      fetchSchedule();
+    }, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -230,6 +280,119 @@ export default function Dashboard() {
           {/* LEFT COLUMN: Launch & Automate */}
           <div className="lg:col-span-2 space-y-8">
             
+            {/* CARD 0: TODAY'S MASTER SCHEDULE (MANUAL / AUTO-JOIN) */}
+            <div className="glass-panel rounded-2xl p-6 glow-indigo relative overflow-hidden border border-indigo-500/30">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-4 border-b border-white/10">
+                <div>
+                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                    <Calendar className="w-5 h-5 text-indigo-400" />
+                    Today's Master Schedule
+                  </h2>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    Only classes with valid meeting links attached. Tap <strong>Start Recording</strong> to launch bot.
+                  </p>
+                </div>
+
+                {/* MODE TOGGLE SWITCHER */}
+                <div className="flex items-center bg-[#0a0a10] p-1 rounded-xl border border-white/10 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleMode('manual')}
+                    className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
+                      scheduleMode === 'manual'
+                        ? 'bg-indigo-600 text-white shadow-md'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    🖐️ Manual Control
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleMode('auto')}
+                    className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
+                      scheduleMode === 'auto'
+                        ? 'bg-emerald-600 text-white shadow-md'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    🤖 Auto-Join Mode
+                  </button>
+                </div>
+              </div>
+
+              {/* SCHEDULE LIST */}
+              {todaySchedule.length === 0 ? (
+                <div className="text-center py-8 text-zinc-500 text-sm">
+                  {isFetchingSchedule ? 'Loading schedule from Google Sheets...' : 'No classes with attached meeting links found for today.'}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {todaySchedule.map((cls) => (
+                    <div
+                      key={cls.sessionId}
+                      className="p-4 rounded-xl bg-white/[0.03] border border-white/5 hover:border-indigo-500/30 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                            ⏰ {cls.startTime}
+                          </span>
+                          <span className="text-sm font-bold text-white">
+                            {cls.studentName}
+                          </span>
+                          <span className="text-xs text-zinc-400 font-medium">
+                            ({cls.subject})
+                          </span>
+                        </div>
+
+                        <p className="text-xs text-zinc-400">
+                          👨‍🏫 Teacher: <span className="text-zinc-300 font-medium">{cls.teacherName}</span>
+                        </p>
+
+                        <a
+                          href={cls.meetingUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-cyan-400 hover:underline flex items-center gap-1 font-mono truncate max-w-md"
+                        >
+                          <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                          <span className="truncate">{cls.meetingUrl}</span>
+                        </a>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {cls.isDispatched ? (
+                          <span className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center gap-1.5">
+                            <CheckCircle className="w-4 h-4" />
+                            Dispatched / Recording
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleDispatchClass(cls)}
+                            disabled={dispatchingSessionId === cls.sessionId}
+                            className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-semibold text-xs transition-all shadow-md shadow-indigo-600/20 flex items-center gap-2 disabled:opacity-50"
+                          >
+                            {dispatchingSessionId === cls.sessionId ? (
+                              <>
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                Launching Bot...
+                              </>
+                            ) : (
+                              <>
+                                <Play className="w-4 h-4 fill-white" />
+                                Start Recording
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {/* CARD 1: INSTANT RECORDER LAUNCHER */}
             <div className="glass-panel rounded-2xl p-6 glow-indigo relative overflow-hidden">
               <div className="absolute -top-10 -right-10 w-24 h-24 bg-indigo-600/10 rounded-full blur-2xl" />

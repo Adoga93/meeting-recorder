@@ -333,6 +333,16 @@ async function checkSchedule() {
 
       console.log(`   ⏰ [${c.startTime}] ${c.subject} (${c.studentName} & ${c.teacherName}) -> In ${diffMins.toFixed(1)} mins | Link: ${c.meetingUrl ? '✅ Attached' : '❌ Missing'} | Dispatched: ${isDispatched ? 'Yes' : 'No'}`);
 
+      // Check scheduler mode (manual vs auto)
+      let configMode = 'manual';
+      const CONFIG_PATH = path.join(__dirname, 'scheduler_config.json');
+      if (fs.existsSync(CONFIG_PATH)) {
+        try {
+          const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+          if (cfg.mode) configMode = cfg.mode;
+        } catch (e) {}
+      }
+
       // TRIGGER WINDOW:
       // Join starting 3 minutes BEFORE class start time, up to 45 minutes AFTER class start time
       if (diffMins <= 3 && diffMins >= -45) {
@@ -345,7 +355,12 @@ async function checkSchedule() {
           continue;
         }
 
-        console.log(`🎯 [TRIGGERING RECORDING BOT] Time window reached for ${c.studentName} (${c.subject})!`);
+        if (configMode === 'manual') {
+          console.log(`🖐️ [MANUAL CONTROL ACTIVE] Class window reached for ${c.studentName} (${c.subject}). Ready for user tap on PAS Recorder.`);
+          continue;
+        }
+
+        console.log(`🎯 [TRIGGERING RECORDING BOT] Auto-join triggered for ${c.studentName} (${c.subject})!`);
 
         dispatched[c.sessionId] = {
           dispatchedAt: new Date().toISOString(),
