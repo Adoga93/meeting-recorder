@@ -5,7 +5,7 @@ const path = require('path');
 
 // Configure recording configurations via environment variables
 const MEETING_URL = process.env.MEETING_URL || 'https://zoom.us/j/123456789'; 
-const BOT_NAME = process.env.BOT_NAME || 'AI Recorder (Emma)';
+const BOT_NAME = process.env.BOT_NAME || 'PAS Tutors Admin';
 const MAX_DURATION_MINUTES = parseInt(process.env.MAX_DURATION_MINUTES || '60', 10);
 
 async function runZoomBot() {
@@ -185,29 +185,33 @@ async function runZoomBot() {
   // --- MONITOR LIFECYCLE ---
   const startTime = Date.now();
   const maxDurationMs = MAX_DURATION_MINUTES * 60 * 1000;
+  const START_GRACE_PERIOD_MS = 15 * 60 * 1000;
   let keepRecording = true;
+
+  console.log(`⏱️ Zoom Lifecycle Monitor started with 15-minute initial grace period.`);
 
   while (keepRecording) {
     await page.waitForTimeout(10000);
 
     const elapsedTime = Date.now() - startTime;
     if (elapsedTime >= maxDurationMs) {
-      console.log("\n⚠️ Reached maximum recording duration. Stopping bot.");
+      console.log(`\n⚠️ Reached maximum recording duration (${MAX_DURATION_MINUTES} mins). Stopping bot.`);
       keepRecording = false;
       break;
     }
 
-    // Check if we are still in the meeting
-    const leaveButton = page.locator('button.leave-meeting-options__btn, button:has-text("Leave")');
-    const isMeetingActive = await leaveButton.isVisible().catch(() => false);
-    if (!isMeetingActive) {
-      // If leave button isn't visible, check if we've been disconnected or kicked
-      const relog = page.locator('button:has-text("Rejoin"), button:has-text("Return to home")');
-      if (await relog.isVisible().catch(() => false)) {
-        console.log("\n🚪 Disconnected from Zoom meeting.");
-        keepRecording = false;
-        break;
-      }
+    // Keep page interaction alive (simulates mouse activity to prevent Zoom idle timeout)
+    await page.mouse.move(200, 200).catch(() => {});
+    await page.mouse.move(400, 300).catch(() => {});
+
+    // Check if explicitly kicked or meeting ended by host
+    const kickOrEnd = page.locator(
+      'text="This meeting has been ended by host", text="The host has ended the meeting", text="You have been removed", button:has-text("Return to home"), button:has-text("Rejoin")'
+    );
+    if (await kickOrEnd.first().isVisible({ timeout: 1000 }).catch(() => false)) {
+      console.log("\n🚪 Zoom meeting ended or host removed bot. Disconnecting.");
+      keepRecording = false;
+      break;
     }
   }
 

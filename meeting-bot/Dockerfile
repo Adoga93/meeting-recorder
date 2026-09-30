@@ -4,6 +4,7 @@ FROM node:20-slim
 RUN apt-get update && apt-get install -y \
     xvfb \
     pulseaudio \
+    pulseaudio-utils \
     ffmpeg \
     libnss3 \
     libatk-bridge2.0-0 \
@@ -20,6 +21,9 @@ RUN apt-get update && apt-get install -y \
     libglapi-mesa \
     libosmesa6 \
     && rm -rf /var/lib/apt/lists/*
+
+# Ensure /tmp/.X11-unix exists with sticky bit 1777 permissions before switching to node user
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 
 # The official Node image already has a pre-created non-root user named "node" (UID 1000).
 # We just need to add this existing "node" user to the audio groups.

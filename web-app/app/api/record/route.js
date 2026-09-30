@@ -19,7 +19,13 @@ export async function POST(request) {
     const recordingsPath = path.join(botPath, 'recordings');
     
     // Command to launch the Docker container in the background
-    const dockerCmd = `docker run --rm -d -v "${path.join(botPath, 'bot.js')}:/app/bot.js" -v "${recordingsPath}:/app/recordings" -e MEETING_URL="${meetingUrl}" -e BOT_NAME="${botName || 'PAS Tutors Recorder'}" meeting-bot`;
+    const dockerCmd = `docker run --rm -d ` +
+      `-v "${path.join(botPath, 'bot.js')}:/app/bot.js" ` +
+      `-v "${path.join(botPath, 'zoom.js')}:/app/zoom.js" ` +
+      `-v "${path.join(botPath, 'teams.js')}:/app/teams.js" ` +
+      `-v "${path.join(botPath, 'upload_drive.js')}:/app/upload_drive.js" ` +
+      `-v "${recordingsPath}:/app/recordings" ` +
+      `-e MEETING_URL="${meetingUrl}" -e BOT_NAME="${botName || 'PAS Tutors Admin'}" meeting-bot`;
 
     console.log(`Executing: ${dockerCmd}`);
 

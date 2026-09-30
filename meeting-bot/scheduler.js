@@ -56,8 +56,14 @@ function dispatchRecorderBot(session) {
     fs.mkdirSync(recordingsPath, { recursive: true });
   }
 
-  const botName = `PAS Tutors Recorder`;
-  const dockerCmd = `docker run --rm -d -v "${path.join(botPath, 'bot.js')}:/app/bot.js" -v "${recordingsPath}:/app/recordings" -e MEETING_URL="${meetingUrl}" -e BOT_NAME="${botName}" meeting-bot`;
+  const botName = `PAS Tutors Admin`;
+  const dockerCmd = `docker run --rm -d ` +
+    `-v "${path.join(botPath, 'bot.js')}:/app/bot.js" ` +
+    `-v "${path.join(botPath, 'zoom.js')}:/app/zoom.js" ` +
+    `-v "${path.join(botPath, 'teams.js')}:/app/teams.js" ` +
+    `-v "${path.join(botPath, 'upload_drive.js')}:/app/upload_drive.js" ` +
+    `-v "${recordingsPath}:/app/recordings" ` +
+    `-e MEETING_URL="${meetingUrl}" -e BOT_NAME="${botName}" meeting-bot`;
 
   console.log(`\n======================================================`);
   console.log(`🚀 [AUTO-SCHEDULER] DISPATCHING RECORDER BOT FOR CLASS:`);
@@ -334,7 +340,7 @@ async function checkSchedule() {
       console.log(`   ⏰ [${c.startTime}] ${c.subject} (${c.studentName} & ${c.teacherName}) -> In ${diffMins.toFixed(1)} mins | Link: ${c.meetingUrl ? '✅ Attached' : '❌ Missing'} | Dispatched: ${isDispatched ? 'Yes' : 'No'}`);
 
       // Check scheduler mode (manual vs auto)
-      let configMode = 'manual';
+      let configMode = 'auto';
       const CONFIG_PATH = path.join(__dirname, 'scheduler_config.json');
       if (fs.existsSync(CONFIG_PATH)) {
         try {

@@ -5,7 +5,7 @@ const path = require('path');
 
 // Configure recording configurations via environment variables (with defaults)
 const MEETING_URL = process.env.MEETING_URL || 'https://meet.google.com/abc-defg-hij'; 
-const BOT_NAME = process.env.BOT_NAME || 'AI Assistant (Recording)';
+const BOT_NAME = process.env.BOT_NAME || 'PAS Tutors Admin';
 const MAX_DURATION_MINUTES = parseInt(process.env.MAX_DURATION_MINUTES || '60', 10);
 
 // Dynamic router imports depending on the platform type
@@ -306,6 +306,8 @@ async function runBot() {
     const log = data.toString();
     if (log.includes('frame=')) {
       process.stdout.write(`\rRecording status: ${log.trim().split('\n').pop()}`);
+    } else if (log.toLowerCase().includes('error') || log.toLowerCase().includes('cannot') || log.toLowerCase().includes('failed')) {
+      console.error(`[FFmpeg Error]: ${log.trim()}`);
     }
   });
 
@@ -318,25 +320,37 @@ async function runBot() {
   // --- MONITOR MEETING LIFECYCLE ---
   const startTime = Date.now();
   const maxDurationMs = MAX_DURATION_MINUTES * 60 * 1000;
+  const START_GRACE_PERIOD_MS = 15 * 60 * 1000; // 15-minute initial grace period for students/teachers to join
+  const REQUIRED_ALONE_CHECKS = 18; // Must be empty for 18 consecutive checks (3 mins) before leaving
+  let consecutiveAloneCount = 0;
   let keepRecording = true;
+
+  console.log(`⏱️ Lifecycle Monitor started. 15-minute initial arrival grace period active.`);
 
   while (keepRecording) {
     await page.waitForTimeout(10000); // Check status every 10 seconds
 
     const elapsedTime = Date.now() - startTime;
+    const elapsedMinutes = (elapsedTime / (60 * 1000)).toFixed(1);
+    const isGracePeriod = elapsedTime < START_GRACE_PERIOD_MS;
+
     if (elapsedTime >= maxDurationMs) {
-      console.log("\n⚠️ Reached maximum recording duration. Stopping bot.");
+      console.log(`\n⚠️ Reached maximum recording duration (${MAX_DURATION_MINUTES} mins). Stopping bot.`);
       keepRecording = false;
       break;
     }
 
-    // 1. Check if the host ended the call or removed the bot
+    // Keep page interaction alive (simulates mouse activity to prevent idle disconnects)
+    await page.mouse.move(150, 150).catch(() => {});
+    await page.mouse.move(450, 350).catch(() => {});
+
+    // 1. Check if the host explicitly ended the call or removed the bot
     const endedIndicator = page.locator(
-      'text="The host ended the meeting", text="Meeting ended", text="You\'ve been removed", text="You were removed", button:has-text("Return to home screen"), button:has-text("Submit feedback")'
+      'text="The host ended the meeting", text="Meeting ended", text="You\'ve been removed", text="You were removed", text="The call ended", div:has-text("You left the meeting")'
     );
     const hasEnded = await endedIndicator.first().isVisible({ timeout: 1000 }).catch(() => false);
     if (hasEnded) {
-      console.log("\n🚪 Meeting end indicator detected (Host ended call / Return to home screen). Leaving now.");
+      console.log(`\n🚪 Meeting end indicator detected (Host ended call or removed bot). Leaving now.`);
       keepRecording = false;
       break;
     }
@@ -344,43 +358,54 @@ async function runBot() {
     // 2. Check if URL navigated away from the meeting call
     const currentUrl = page.url();
     if (!currentUrl.includes('meet.google.com/')) {
-      console.log("\n🚪 Navigated away from meeting room URL. Disconnecting bot.");
+      console.log(`\n🚪 Navigated away from meeting room URL (${currentUrl}). Disconnecting bot.`);
       keepRecording = false;
       break;
     }
 
-    // 3. Check if the "Leave call" button is still visible
-    const leaveButtonSelector = 'button[aria-label="Leave call"], button[aria-label="Leave meeting"]';
-    const isLeaveBtnVisible = await page.locator(leaveButtonSelector).isVisible({ timeout: 1000 }).catch(() => false);
-    if (!isLeaveBtnVisible) {
-      console.log("\n🚪 Meeting active status: No 'Leave call' button found. Bot disconnected.");
-      keepRecording = false;
-      break;
-    }
-
-    // 4. Check if everyone else has left
+    // 3. Check participant presence with arrival grace period and consecutive check buffer
     try {
       const alonePrompt = await page.locator('text="You\'re the only one here"').isVisible({ timeout: 1000 }).catch(() => false);
-      if (alonePrompt) {
-        console.log("\n🚪 'You're the only one here' prompt detected. Leaving now.");
-        keepRecording = false;
-        break;
-      }
-
+      
+      let participantCount = null;
       let participantText = await page.locator('div[aria-label="Show everyone"] + span').textContent().catch(() => null);
       if (!participantText) {
         participantText = await page.locator('button[aria-label*="people" i] span, button[aria-label*="participant" i] span').textContent().catch(() => null);
       }
       if (participantText) {
         const count = parseInt(participantText.replace(/\D/g, ''), 10);
-        if (!isNaN(count) && count <= 1) {
-          console.log(`\n🚪 Everyone else has left the meeting (${count} participant left). Leaving now.`);
-          keepRecording = false;
-          break;
+        if (!isNaN(count)) {
+          participantCount = count;
         }
       }
+
+      const isAlone = alonePrompt || (participantCount !== null && participantCount <= 1);
+
+      if (isAlone) {
+        if (isGracePeriod) {
+          // Inside 15-minute start window: never leave, wait patiently for teacher & student
+          consecutiveAloneCount = 0;
+          const remainingGrace = ((START_GRACE_PERIOD_MS - elapsedTime) / (60 * 1000)).toFixed(1);
+          // Log status every 30 seconds
+          if (Math.floor(elapsedTime / 10000) % 3 === 0) {
+            console.log(`\n⏳ [${elapsedMinutes}m elapsed] Waiting for class participants to join (${remainingGrace}m grace period remaining).`);
+          }
+        } else {
+          // Past 15-minute start window: buffer consecutive empty checks
+          consecutiveAloneCount++;
+          console.log(`\n⚠️ [${elapsedMinutes}m elapsed] Room appears empty (${consecutiveAloneCount}/${REQUIRED_ALONE_CHECKS} consecutive checks).`);
+          if (consecutiveAloneCount >= REQUIRED_ALONE_CHECKS) {
+            console.log(`\n🚪 Everyone has left the meeting (room empty for 3 consecutive minutes). Ending session.`);
+            keepRecording = false;
+            break;
+          }
+        }
+      } else {
+        // Room has participants! Reset alone counter
+        consecutiveAloneCount = 0;
+      }
     } catch (e) {
-      // Bypassed if UI layout is slightly different
+      // Ignored if UI layout varies
     }
   }
 

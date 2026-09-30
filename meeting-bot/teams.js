@@ -208,19 +208,26 @@ async function runTeamsBot() {
   // --- MONITOR LIFECYCLE ---
   const startTime = Date.now();
   const maxDurationMs = MAX_DURATION_MINUTES * 60 * 1000;
+  const START_GRACE_PERIOD_MS = 15 * 60 * 1000;
   let keepRecording = true;
+
+  console.log(`⏱️ Teams Lifecycle Monitor started with 15-minute arrival grace period.`);
 
   while (keepRecording) {
     await page.waitForTimeout(10000);
 
     const elapsedTime = Date.now() - startTime;
     if (elapsedTime >= maxDurationMs) {
-      console.log("\n⚠️ Maximum recording duration reached. Ending session.");
+      console.log(`\n⚠️ Maximum recording duration reached (${MAX_DURATION_MINUTES} mins). Ending session.`);
       keepRecording = false;
       break;
     }
 
-    // Check if the call has ended or we have been disconnected
+    // Keep page interaction alive (simulates mouse activity to prevent Teams idle)
+    await page.mouse.move(200, 200).catch(() => {});
+    await page.mouse.move(400, 300).catch(() => {});
+
+    // Check if the call has explicitly ended or we have been removed
     const endIndicators = [
       'text="The meeting has ended"',
       'text="You\'ve been removed from the meeting"',
@@ -237,15 +244,6 @@ async function runTeamsBot() {
     }
 
     if (!keepRecording) break;
-
-    // Check if the hangup button is still in the DOM
-    const hangupButton = page.locator('button[data-tid="call-hangup"], button[aria-label*="Hang up" i], #hangup-button').first();
-    const hangupVisible = await hangupButton.isVisible().catch(() => false);
-    if (!hangupVisible) {
-      console.log("\n🚪 Leave/Hangup button disappeared. Meeting concluded.");
-      keepRecording = false;
-      break;
-    }
   }
 
   // --- CLEANUP & FINALIZE ---

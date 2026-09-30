@@ -23,7 +23,7 @@ import {
 export default function Dashboard() {
   // --- STATE MANAGEMENT ---
   const [meetingUrl, setMeetingUrl] = useState("");
-  const [botName, setBotName] = useState("AI Recorder (Emma)");
+  const [botName, setBotName] = useState("PAS Tutors Admin");
   const [platform, setPlatform] = useState("google_meet");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -97,7 +97,7 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           meetingUrl: cls.meetingUrl,
-          botName: `PAS Tutors (${cls.studentName})`
+          botName: "PAS Tutors Admin"
         })
       });
 
