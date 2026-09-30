@@ -61,36 +61,28 @@ async function runBot() {
     permissions: ['camera', 'microphone'],
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
     locale: 'en-US',
+    extraHTTPHeaders: {
+      'Accept-Language': 'en-US,en;q=0.9'
+    },
     timezoneId: 'America/New_York'
   };
 
-  // Load storageState (cookies + localStorage) if it exists, otherwise fallback to cookies.json
-  if (fs.existsSync(statePath)) {
+  // Google Meet bots join cleanly as guest with display name BOT_NAME (PAS Tutors Admin).
+  // Stale/expired Google session tokens trigger account chooser blocks and redirect loops.
+  if (process.env.USE_GOOGLE_AUTH === 'true' && fs.existsSync(statePath)) {
     console.log(`🔑 Found storage state.json at: ${statePath}. Loading authenticated state...`);
     contextOptions.storageState = statePath;
+  } else {
+    console.log(`ℹ️ Running in pure Guest Mode with display name: "${BOT_NAME}".`);
   }
 
   const context = await browser.newContext(contextOptions);
-
-  if (!fs.existsSync(statePath) && fs.existsSync(cookiesPath)) {
-    console.log(`🍪 Found legacy cookies.json at: ${cookiesPath}. Injecting...`);
-    try {
-      const cookies = JSON.parse(fs.readFileSync(cookiesPath, 'utf8'));
-      await context.addCookies(cookies);
-      console.log(`✅ Injected ${cookies.length} session cookies.`);
-    } catch (e) {
-      console.error(`❌ Failed to load cookies:`, e.message);
-    }
-  } else if (!fs.existsSync(statePath) && !fs.existsSync(cookiesPath)) {
-    console.log(`ℹ️ No authenticated state or cookies found. Running as unauthenticated guest.`);
-  }
 
   const page = await context.newPage();
   
   // Forward page console events and errors to Node console to capture network/WebRTC errors
   page.on('console', msg => {
     const txt = msg.text();
-    // Filter out noisy warnings if needed, but show critical issues
     if (msg.type() === 'error' || txt.includes('WebRTC') || txt.includes('ICE') || txt.includes('connect')) {
       console.log(`[Browser Console] ${msg.type().toUpperCase()}: ${txt}`);
     }
@@ -104,16 +96,16 @@ async function runBot() {
 
   console.log("🌐 Navigating to Google Meet call...");
   try {
-    // Wait for DOM content to load instead of the entire heavy SPA resources (prevents 30s timeouts)
     await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
-    await page.waitForTimeout(5000); // Give it a moment to stabilize
+    await page.waitForTimeout(5000);
     
-    // Check if we got redirected to the landing/marketing page instead of the lobby
-    const currentUrl = page.url();
+    // Check if we got redirected away to marketing/account pages
+    let currentUrl = page.url();
     console.log(`📍 Current URL: ${currentUrl}`);
-    if (currentUrl.includes('/about/') || currentUrl.includes('apps.google.com') || currentUrl.endsWith('meet.google.com/') || currentUrl.endsWith('meet.google.com')) {
-      console.log("⚠️ Redirected to landing page! Attempting to force navigation directly to the room...");
-      await page.goto(MEETING_URL, { waitUntil: 'networkidle', timeout: 90000 });
+    if (currentUrl.includes('/about/') || currentUrl.includes('apps.google.com') || currentUrl.includes('workspace.google') || currentUrl.includes('accounts.google.com') || currentUrl.endsWith('meet.google.com/') || currentUrl.endsWith('meet.google.com')) {
+      console.log("⚠️ Redirected away from meeting room! Purging cookies and forcing direct room navigation...");
+      await context.clearCookies().catch(() => {});
+      await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
       await page.waitForTimeout(5000);
     }
   } catch (navError) {
@@ -123,57 +115,12 @@ async function runBot() {
   // --- HANDLE ACCOUNT CHOOSER / SIGN-IN WALLS ---
   try {
     let currentUrl = page.url();
-    if (currentUrl.includes('accounts.google.com')) {
-      console.log("📍 Redirected to Google Accounts. Handling sign-in chooser...");
-      const chooserHeader = page.locator('text="Choose an account", text="Choose Account"');
-      const isChooserVisible = await chooserHeader.isVisible({ timeout: 5000 }).catch(() => false);
-      
-      if (isChooserVisible) {
-        console.log("👥 Account chooser detected.");
-        
-        // Check if the account is signed out
-        const isSignedOut = await page.locator('text="Signed out"').isVisible({ timeout: 2000 }).catch(() => false);
-        if (isSignedOut) {
-          console.warn("⚠️ Google Account is marked as 'Signed out'. Cookies have expired!");
-          console.log("🧼 Clearing expired cookies and falling back to guest mode...");
-          await context.clearCookies();
-          console.log("🌐 Navigating back to Google Meet room as guest...");
-          await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
-          await page.waitForTimeout(5000);
-        } else {
-          console.log("Selecting account...");
-          // Find account option by data-email, role or substring text match
-          let accountOption = page.locator('[data-email]');
-          if (await accountOption.count() === 0) {
-            accountOption = page.locator('div[role="link"]:has-text("@")');
-          }
-          if (await accountOption.count() === 0) {
-            accountOption = page.locator('text=@');
-          }
-
-          if (await accountOption.count() > 0) {
-            const matchedEmail = await accountOption.first().getAttribute('data-email') || 'matching option';
-            console.log(`👉 Selecting account: ${matchedEmail}`);
-            await accountOption.first().click();
-            console.log("✅ Clicked account option. Waiting for authentication to settle...");
-            await page.waitForTimeout(5000);
-            
-            // Force navigation back to the meeting room now that the account is selected
-            console.log("🌐 Forcing navigation back to Google Meet call...");
-            await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
-            await page.waitForTimeout(5000);
-          } else {
-            console.warn("⚠️ Account chooser was visible, but could not find any account options containing '@' or data-email.");
-          }
-        }
-      } else {
-        // Not a chooser page but still on accounts.google.com (e.g. password prompt or login screen)
-        console.warn("⚠️ Stuck on Google Sign-in screen. Clearing cookies and falling back to guest mode...");
-        await context.clearCookies();
-        console.log("🌐 Navigating back to Google Meet room as guest...");
-        await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
-        await page.waitForTimeout(5000);
-      }
+    if (currentUrl.includes('accounts.google.com') || currentUrl.includes('workspace.google')) {
+      console.warn("⚠️ Trapped in Google sign-in/workspace screen. Purging cookies and falling back to guest mode...");
+      await context.clearCookies().catch(() => {});
+      console.log("🌐 Navigating back to Google Meet room as guest...");
+      await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+      await page.waitForTimeout(5000);
     }
   } catch (chooserError) {
     console.warn("⚠️ Exception handling account chooser:", chooserError.message);
@@ -181,12 +128,11 @@ async function runBot() {
 
   // --- BYPASS COOKIE CONSENT WALLS (For UK/Europe/West Africa regions) ---
   try {
-    // Look for standard Google "I agree" or "Accept all" buttons
-    const consentButton = page.locator('button:has-text("Accept all"), font:has-text("Accept all"), button:has-text("I agree"), button:has-text("Reject all"), button:has-text("Accept"), [aria-label*="Accept all"]');
-    if (await consentButton.isVisible({ timeout: 5000 })) {
+    const consentButton = page.locator('button:has-text("Accept all"), button:has-text("Tout accepter"), button:has-text("I agree"), button:has-text("J\'accepte"), button:has-text("Reject all"), button:has-text("Accept"), [aria-label*="Accept all" i]').first();
+    if (await consentButton.isVisible({ timeout: 5000 }).catch(() => false)) {
       console.log("🍪 Google cookie consent screen detected. Bypassing...");
-      await consentButton.click();
-      await page.waitForTimeout(3000); // Wait for redirect/page reload
+      await consentButton.click({ force: true });
+      await page.waitForTimeout(3000);
     }
   } catch (e) {
     // No consent screen appeared, continue
@@ -194,70 +140,93 @@ async function runBot() {
 
   // --- AUTOMATE GOOGLE MEET ENTRY ---
   try {
-    // 1. Enter Display Name if prompted (only for anonymous guests)
-    const nameInputSelector = 'input[type="text"], input[placeholder="Your name"], input[aria-label="Your name"]';
+    // 1. Check if the meeting hasn't started yet ("You can't join this video call" / "Host must join first")
+    const cantJoinSelector = 'text="You can\'t join this video call", text="Vous ne pouvez pas participer", text="No one can join a meeting unless invited", button:has-text("Return to home screen"), button:has-text("Retourner à l\'écran")';
+    const hostWaitStartTime = Date.now();
+    const MAX_HOST_WAIT_MS = 15 * 60 * 1000; // Wait up to 15 minutes for host to open room
+
+    while (Date.now() - hostWaitStartTime < MAX_HOST_WAIT_MS) {
+      const isCantJoin = await page.locator(cantJoinSelector).first().isVisible({ timeout: 2000 }).catch(() => false);
+      if (isCantJoin) {
+        const elapsedMins = Math.round((Date.now() - hostWaitStartTime) / 1000 / 60);
+        console.log(`⏳ Host has not opened the meeting yet ("You can't join this video call"). Waiting for teacher/host to start room (${elapsedMins}/15 mins)...`);
+        await page.waitForTimeout(15000);
+        console.log("🔄 Checking if meeting room is now open...");
+        await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+        await page.waitForTimeout(4000);
+        continue;
+      }
+      break;
+    }
+
+    // Dismiss any tooltips/popups like "Got it", "Dismiss", "Close" (e.g. Camera/Mic not found modal)
     try {
-      if (await page.locator(nameInputSelector).isVisible({ timeout: 5000 })) {
-        await page.fill(nameInputSelector, BOT_NAME);
+      const dismissBtn = page.locator('button:has-text("Close"), button:has-text("Fermer"), button:has-text("Got it"), button:has-text("Got It"), button:has-text("Compris"), button:has-text("Dismiss"), button:has-text("Ignorer")').first();
+      if (await dismissBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await dismissBtn.click({ force: true });
+        console.log("👋 Dismissed lobby dialog modal.");
+        await page.waitForTimeout(1000);
+      }
+    } catch (e) {}
+
+    // 2. Enter Display Name if prompted
+    const nameInputSelector = 'input[type="text"], input[placeholder*="name" i], input[aria-label*="name" i], input[placeholder*="nom" i], input[aria-label*="nom" i]';
+    try {
+      const nameInput = page.locator(nameInputSelector).first();
+      if (await nameInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await nameInput.fill(BOT_NAME);
         console.log(`📝 Entered display name: "${BOT_NAME}"`);
       } else {
-        console.log("ℹ️ No display name input field visible. Assuming pre-authenticated Google session.");
+        console.log("ℹ️ No display name input field visible. Proceeding to join...");
       }
     } catch (e) {
       console.log("ℹ️ No display name input field found. Proceeding to join...");
     }
 
-    // Dismiss any tooltips/popups like "Got it"
-    try {
-      const gotItBtn = page.locator('button:has-text("Got it"), [aria-label*="Got it"], button:has-text("Got It")').first();
-      if (await gotItBtn.isVisible({ timeout: 5000 })) {
-        await gotItBtn.click();
-        console.log("👋 Dismissed 'Got it' onboarding tooltip.");
-        await page.waitForTimeout(1000);
-      }
-    } catch (e) {
-      // Tooltip didn't show up
-    }
-
     // Ensure microphone and camera are muted before joining
     try {
       console.log("🔇 Ensuring microphone and camera are muted...");
-      await page.keyboard.press('Control+d'); // Google Meet hotkey to mute mic
+      await page.keyboard.press('Control+d');
       await page.waitForTimeout(500);
-      await page.keyboard.press('Control+e'); // Google Meet hotkey to turn off camera
+      await page.keyboard.press('Control+e');
       await page.waitForTimeout(500);
 
-      const micBtn = page.locator('div[role="button"][aria-label*="turn off microphone" i], button[aria-label*="turn off microphone" i], [aria-label*="microphone" i][data-is-muted="false"]').first();
+      const micBtn = page.locator('div[role="button"][aria-label*="microphone" i], button[aria-label*="microphone" i]').first();
       if (await micBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await micBtn.click();
-        console.log("🔇 Clicked mute microphone button.");
+        const ariaLabel = (await micBtn.getAttribute('aria-label') || '').toLowerCase();
+        if (ariaLabel.includes('turn off') || ariaLabel.includes('désactiver')) {
+          await micBtn.click();
+          console.log("🔇 Clicked mute microphone button.");
+        }
       }
     } catch (muteErr) {}
 
-    // 2. Click "Ask to Join", "Join now", "Join here too", or "Switch here"
-    // Use .first() to prevent Playwright strict mode violations
+    // 3. Click "Ask to Join", "Join now", "Join here too", or "Switch here"
     const joinButton = page.locator(
       'button:has-text("Ask to join"), button:has-text("Join now"), ' +
       'button:has-text("Ask to Join"), button:has-text("Join Now"), ' +
+      'button:has-text("Demander à participer"), button:has-text("Participer à la réunion"), ' +
+      'button:has-text("Demander"), button:has-text("Participer"), ' +
       'button:has-text("Switch here"), button:has-text("Switch Here"), ' +
       'button:has-text("Join here too"), button:has-text("Join Here Too"), ' +
-      'button[aria-label*="join" i], button[aria-label*="switch" i]'
+      'button[aria-label*="join" i], button[aria-label*="participer" i], ' +
+      'button[aria-label*="switch" i]'
     ).first();
     
-    await joinButton.waitFor({ state: 'visible', timeout: 20000 });
+    await joinButton.waitFor({ state: 'visible', timeout: 30000 });
     const btnText = await joinButton.textContent();
     console.log(`☝️ Clicking join button with text: "${btnText.trim()}"`);
     await joinButton.click({ force: true });
     console.log("⏳ Requested entry. Waiting for host to admit us in the meeting lobby...");
 
-    // 3. Confirm Admission (Wait for the "Leave Call" button to appear)
-    const leaveButtonSelector = 'button[aria-label="Leave call"], button[aria-label="Leave meeting"]';
-    await page.waitForSelector(leaveButtonSelector, { timeout: 300000 }); // Wait up to 5 minutes
+    // 4. Confirm Admission (Wait up to 15 minutes for host to admit)
+    const leaveButtonSelector = 'button[aria-label*="Leave" i], button[aria-label*="Quitter" i], button[data-tooltip*="Leave" i], button[data-tooltip*="Quitter" i], [aria-label*="Leave call" i], [aria-label*="Quitter l\'appel" i]';
+    await page.waitForSelector(leaveButtonSelector, { timeout: 900000 });
     console.log("🎉 Successfully Admitted to the meeting!");
 
     // Double check mic is muted inside the call room
     try {
-      const inCallMicUnmuted = page.locator('button[aria-label*="turn off microphone" i]').first();
+      const inCallMicUnmuted = page.locator('button[aria-label*="turn off microphone" i], button[aria-label*="désactiver le micro" i]').first();
       if (await inCallMicUnmuted.isVisible({ timeout: 2000 }).catch(() => false)) {
         await page.keyboard.press('Control+d');
         console.log("🔇 Muted microphone inside meeting room.");
