@@ -67,16 +67,25 @@ async function runBot() {
     timezoneId: 'America/New_York'
   };
 
-  // Google Meet bots join cleanly as guest with display name BOT_NAME (PAS Tutors Admin).
-  // Stale/expired Google session tokens trigger account chooser blocks and redirect loops.
-  if (process.env.USE_GOOGLE_AUTH === 'true' && fs.existsSync(statePath)) {
-    console.log(`🔑 Found storage state.json at: ${statePath}. Loading authenticated state...`);
+  // Load storageState (Google account credentials) if present
+  if (fs.existsSync(statePath)) {
+    console.log(`🔑 Found storage state.json at: ${statePath}. Loading authenticated Google session...`);
     contextOptions.storageState = statePath;
-  } else {
-    console.log(`ℹ️ Running in pure Guest Mode with display name: "${BOT_NAME}".`);
+  } else if (fs.existsSync(cookiesPath)) {
+    console.log(`🍪 Found cookies.json at: ${cookiesPath}.`);
   }
 
   const context = await browser.newContext(contextOptions);
+
+  if (!fs.existsSync(statePath) && fs.existsSync(cookiesPath)) {
+    try {
+      const cookies = JSON.parse(fs.readFileSync(cookiesPath, 'utf8'));
+      await context.addCookies(cookies);
+      console.log(`✅ Injected ${cookies.length} session cookies.`);
+    } catch (e) {
+      console.error(`❌ Failed to load cookies:`, e.message);
+    }
+  }
 
   const page = await context.newPage();
   
@@ -102,9 +111,8 @@ async function runBot() {
     // Check if we got redirected away to marketing/account pages
     let currentUrl = page.url();
     console.log(`📍 Current URL: ${currentUrl}`);
-    if (currentUrl.includes('/about/') || currentUrl.includes('apps.google.com') || currentUrl.includes('workspace.google') || currentUrl.includes('accounts.google.com') || currentUrl.endsWith('meet.google.com/') || currentUrl.endsWith('meet.google.com')) {
-      console.log("⚠️ Redirected away from meeting room! Purging cookies and forcing direct room navigation...");
-      await context.clearCookies().catch(() => {});
+    if (currentUrl.includes('/about/') || currentUrl.includes('apps.google.com') || currentUrl.includes('workspace.google') || currentUrl.endsWith('meet.google.com/') || currentUrl.endsWith('meet.google.com')) {
+      console.log("⚠️ Redirected away from meeting room! Attempting direct room navigation...");
       await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
       await page.waitForTimeout(5000);
     }
@@ -115,12 +123,37 @@ async function runBot() {
   // --- HANDLE ACCOUNT CHOOSER / SIGN-IN WALLS ---
   try {
     let currentUrl = page.url();
-    if (currentUrl.includes('accounts.google.com') || currentUrl.includes('workspace.google')) {
-      console.warn("⚠️ Trapped in Google sign-in/workspace screen. Purging cookies and falling back to guest mode...");
-      await context.clearCookies().catch(() => {});
-      console.log("🌐 Navigating back to Google Meet room as guest...");
-      await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
-      await page.waitForTimeout(5000);
+    if (currentUrl.includes('accounts.google.com')) {
+      console.log("📍 Redirected to Google Accounts. Checking session status...");
+      const chooserHeader = page.locator('text="Choose an account", text="Choose Account"');
+      const isChooserVisible = await chooserHeader.isVisible({ timeout: 5000 }).catch(() => false);
+      
+      if (isChooserVisible) {
+        console.log("👥 Account chooser detected.");
+        // Check if account is marked as Signed out
+        const isSignedOut = await page.locator('text="Signed out", text="Déconnecté", text="Session expirée"').isVisible({ timeout: 2000 }).catch(() => false);
+        if (isSignedOut) {
+          console.warn("⚠️ Google Account session has expired on Google servers ('Signed out').");
+          console.log("🧼 Falling back to Guest Mode so the class entry proceeds without missing the meeting...");
+          await context.clearCookies().catch(() => {});
+          await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+          await page.waitForTimeout(5000);
+        } else {
+          console.log("Selecting Google account...");
+          const accountOption = page.locator('div[role="link"]:has-text("@"), div[role="link"]:has-text("PAS Tutor"), [data-email]').first();
+          if (await accountOption.isVisible({ timeout: 3000 }).catch(() => false)) {
+            await accountOption.click();
+            await page.waitForTimeout(4000);
+            await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+            await page.waitForTimeout(5000);
+          }
+        }
+      } else {
+        console.warn("⚠️ Stuck on Google Sign-in screen. Falling back to Guest Mode...");
+        await context.clearCookies().catch(() => {});
+        await page.goto(MEETING_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+        await page.waitForTimeout(5000);
+      }
     }
   } catch (chooserError) {
     console.warn("⚠️ Exception handling account chooser:", chooserError.message);
