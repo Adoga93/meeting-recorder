@@ -15,6 +15,16 @@ function normalizeName(str) {
   return str.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function cleanMeetingUrl(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url.trim());
+    return `${u.origin}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
+  } catch (e) {
+    return url.trim().toLowerCase().replace(/\/+$/, '');
+  }
+}
+
 function getDispatchedSessions() {
   if (fs.existsSync(DISPATCHED_PATH)) {
     try {
@@ -213,13 +223,46 @@ export async function GET() {
       }
     }
 
+    // Group classes that share the exact same meeting URL and start time
+    const groupedByLinkAndTime = new Map();
+    for (let c of todayClasses) {
+      const cleanUrl = cleanMeetingUrl(c.meetingUrl);
+      const groupKey = cleanUrl ? `${todayDateStr}_${cleanUrl}_${c.startTime}` : c.sessionId;
+
+      if (!groupedByLinkAndTime.has(groupKey)) {
+        groupedByLinkAndTime.set(groupKey, {
+          ...c,
+          cleanUrl,
+          studentNames: [c.studentName],
+          sessionIds: [c.sessionId]
+        });
+      } else {
+        const existing = groupedByLinkAndTime.get(groupKey);
+        if (!existing.studentNames.includes(c.studentName)) {
+          existing.studentNames.push(c.studentName);
+          existing.studentName = existing.studentNames.join(', ');
+        }
+        if (!existing.sessionIds.includes(c.sessionId)) {
+          existing.sessionIds.push(c.sessionId);
+        }
+      }
+    }
+
+    const deduplicatedClasses = Array.from(groupedByLinkAndTime.values());
     const dispatched = getDispatchedSessions();
 
-    const result = todayClasses.map(c => ({
-      ...c,
-      isDispatched: !!dispatched[c.sessionId],
-      dispatchedAt: dispatched[c.sessionId]?.dispatchedAt || null
-    }));
+    const result = deduplicatedClasses.map(c => {
+      const isDispatched = c.sessionIds ? c.sessionIds.some(id => !!dispatched[id]) : !!dispatched[c.sessionId];
+      const dispatchedAt = c.sessionIds 
+        ? (c.sessionIds.map(id => dispatched[id]?.dispatchedAt).find(Boolean) || null)
+        : (dispatched[c.sessionId]?.dispatchedAt || null);
+
+      return {
+        ...c,
+        isDispatched,
+        dispatchedAt
+      };
+    });
 
     return NextResponse.json({
       success: true,

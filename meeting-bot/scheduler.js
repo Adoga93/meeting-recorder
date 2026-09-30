@@ -14,6 +14,16 @@ function normalizeName(str) {
   return str.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function cleanMeetingUrl(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url.trim());
+    return `${u.origin}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
+  } catch (e) {
+    return url.trim().toLowerCase().replace(/\/+$/, '');
+  }
+}
+
 // Load or initialize dispatched sessions tracker
 function getDispatchedSessions() {
   if (fs.existsSync(DISPATCHED_PATH)) {
@@ -56,47 +66,60 @@ function dispatchRecorderBot(session) {
     fs.mkdirSync(recordingsPath, { recursive: true });
   }
 
-  const botName = `PAS Tutors Admin`;
-  const dockerCmd = `docker run --rm -d ` +
-    `-v "${path.join(botPath, 'bot.js')}:/app/bot.js" ` +
-    `-v "${path.join(botPath, 'zoom.js')}:/app/zoom.js" ` +
-    `-v "${path.join(botPath, 'teams.js')}:/app/teams.js" ` +
-    `-v "${path.join(botPath, 'upload_drive.js')}:/app/upload_drive.js" ` +
-    `-v "${recordingsPath}:/app/recordings" ` +
-    `-e MEETING_URL="${meetingUrl}" -e BOT_NAME="${botName}" meeting-bot`;
+  const cleanUrl = cleanMeetingUrl(meetingUrl);
 
-  console.log(`\n======================================================`);
-  console.log(`🚀 [AUTO-SCHEDULER] DISPATCHING RECORDER BOT FOR CLASS:`);
-  console.log(`📌 Session ID:    ${sessionId}`);
-  console.log(`👨‍🏫 Teacher:       ${teacherName}`);
-  console.log(`🎓 Student:       ${studentName}`);
-  console.log(`📚 Subject:       ${subject}`);
-  console.log(`⏰ Time:          ${scheduledTime}`);
-  console.log(`🔗 Link:          ${meetingUrl}`);
-  console.log(`⚡ Command:       ${dockerCmd}`);
-  console.log(`======================================================\n`);
-
-  exec(dockerCmd, { cwd: botPath }, (err, stdout, stderr) => {
-    if (err) {
-      console.error(`❌ [AUTO-SCHEDULER] Failed to spawn container: ${err.message}`);
-      return;
+  // Runtime guard: check if a container is already actively recording this meeting URL
+  exec('docker ps --format "{{.Command}}"', { cwd: botPath }, (checkErr, psOut) => {
+    if (!checkErr && psOut && cleanUrl) {
+      const alreadyRunning = psOut.split('\n').some(line => line.toLowerCase().includes(cleanUrl));
+      if (alreadyRunning) {
+        console.log(`⚠️ [AUTO-SCHEDULER] A recording bot is ALREADY RUNNING for ${cleanUrl}. Skipping duplicate container.`);
+        return;
+      }
     }
 
-    const containerId = stdout.trim();
-    console.log(`🟢 [AUTO-SCHEDULER] Bot Container Launched! Container ID: ${containerId}`);
+    const botName = `PAS Tutors Admin`;
+    const dockerCmd = `docker run --rm -d ` +
+      `-v "${path.join(botPath, 'bot.js')}:/app/bot.js" ` +
+      `-v "${path.join(botPath, 'zoom.js')}:/app/zoom.js" ` +
+      `-v "${path.join(botPath, 'teams.js')}:/app/teams.js" ` +
+      `-v "${path.join(botPath, 'upload_drive.js')}:/app/upload_drive.js" ` +
+      `-v "${recordingsPath}:/app/recordings" ` +
+      `-e MEETING_URL="${meetingUrl}" -e BOT_NAME="${botName}" meeting-bot`;
 
-    // Wait for container completion to auto-upload to Google Drive
-    exec(`docker wait ${containerId}`, { cwd: botPath }, (waitErr) => {
-      if (!waitErr) {
-        console.log(`🎬 [AUTO-SCHEDULER] Class ended for session ${sessionId}. Triggering Google Drive upload...`);
-        exec(`node upload_drive.js`, { cwd: botPath }, (upErr, upOut) => {
-          if (upErr) {
-            console.error(`❌ [AUTO-SCHEDULER] Drive upload error:`, upErr.message);
-          } else {
-            console.log(`☁️ [AUTO-SCHEDULER] Google Drive upload finished:\n`, upOut);
-          }
-        });
+    console.log(`\n======================================================`);
+    console.log(`🚀 [AUTO-SCHEDULER] DISPATCHING RECORDER BOT FOR CLASS:`);
+    console.log(`📌 Session ID:    ${sessionId}`);
+    console.log(`👨‍🏫 Teacher:       ${teacherName}`);
+    console.log(`🎓 Student(s):     ${studentName}`);
+    console.log(`📚 Subject:       ${subject}`);
+    console.log(`⏰ Time:          ${scheduledTime}`);
+    console.log(`🔗 Link:          ${meetingUrl}`);
+    console.log(`⚡ Command:       ${dockerCmd}`);
+    console.log(`======================================================\n`);
+
+    exec(dockerCmd, { cwd: botPath }, (err, stdout, stderr) => {
+      if (err) {
+        console.error(`❌ [AUTO-SCHEDULER] Failed to spawn container: ${err.message}`);
+        return;
       }
+
+      const containerId = stdout.trim();
+      console.log(`🟢 [AUTO-SCHEDULER] Bot Container Launched! Container ID: ${containerId}`);
+
+      // Wait for container completion to auto-upload to Google Drive
+      exec(`docker wait ${containerId}`, { cwd: botPath }, (waitErr) => {
+        if (!waitErr) {
+          console.log(`🎬 [AUTO-SCHEDULER] Class ended for session ${sessionId}. Triggering Google Drive upload...`);
+          exec(`node upload_drive.js`, { cwd: botPath }, (upErr, upOut) => {
+            if (upErr) {
+              console.error(`❌ [AUTO-SCHEDULER] Drive upload error:`, upErr.message);
+            } else {
+              console.log(`☁️ [AUTO-SCHEDULER] Google Drive upload finished:\n`, upOut);
+            }
+          });
+        }
+      });
     });
   });
 }
@@ -321,13 +344,40 @@ async function checkSchedule() {
       }
     }
 
+    // Group classes that share the exact same meeting link and start time
+    // This prevents multiple bots from joining when a teacher has multiple students in one class!
+    const groupedByLinkAndTime = new Map();
+    for (let c of todayClasses) {
+      const cleanUrl = cleanMeetingUrl(c.meetingUrl);
+      const groupKey = cleanUrl ? `${todayDateStr}_${cleanUrl}_${c.startTime}` : c.sessionId;
+
+      if (!groupedByLinkAndTime.has(groupKey)) {
+        groupedByLinkAndTime.set(groupKey, {
+          ...c,
+          cleanUrl,
+          studentNames: [c.studentName],
+          sessionIds: [c.sessionId]
+        });
+      } else {
+        const existing = groupedByLinkAndTime.get(groupKey);
+        if (!existing.studentNames.includes(c.studentName)) {
+          existing.studentNames.push(c.studentName);
+          existing.studentName = existing.studentNames.join(', ');
+        }
+        if (!existing.sessionIds.includes(c.sessionId)) {
+          existing.sessionIds.push(c.sessionId);
+        }
+      }
+    }
+
+    const deduplicatedClasses = Array.from(groupedByLinkAndTime.values());
     const dispatched = getDispatchedSessions();
     const nowMs = now.getTime();
 
     console.log(`\n--- [AUTO-SCHEDULER SCAN: ${todayDayName}, ${todayDateStr} ${now.toLocaleTimeString('en-GB', { timeZone: TIMEZONE })}] ---`);
-    console.log(`📋 Total Master Classes Scheduled Today: ${todayClasses.length}`);
+    console.log(`📋 Total Master Classes Scheduled Today: ${todayClasses.length} (${deduplicatedClasses.length} unique meeting sessions)`);
 
-    for (let c of todayClasses) {
+    for (let c of deduplicatedClasses) {
       const scheduledDate = getScheduledDateForToday(c.startTime, todayDateStr);
       if (!scheduledDate) {
         console.log(`⚠️ Could not parse time: "${c.startTime}" for ${c.studentName}`);
@@ -335,7 +385,7 @@ async function checkSchedule() {
       }
 
       const diffMins = (scheduledDate.getTime() - nowMs) / (1000 * 60);
-      const isDispatched = !!dispatched[c.sessionId];
+      const isDispatched = c.sessionIds ? c.sessionIds.some(id => !!dispatched[id]) : !!dispatched[c.sessionId];
 
       console.log(`   ⏰ [${c.startTime}] ${c.subject} (${c.studentName} & ${c.teacherName}) -> In ${diffMins.toFixed(1)} mins | Link: ${c.meetingUrl ? '✅ Attached' : '❌ Missing'} | Dispatched: ${isDispatched ? 'Yes' : 'No'}`);
 
@@ -368,14 +418,18 @@ async function checkSchedule() {
 
         console.log(`🎯 [TRIGGERING RECORDING BOT] Auto-join triggered for ${c.studentName} (${c.subject})!`);
 
-        dispatched[c.sessionId] = {
-          dispatchedAt: new Date().toISOString(),
-          teacherName: c.teacherName,
-          studentName: c.studentName,
-          subject: c.subject,
-          scheduledTime: c.startTime,
-          meetingUrl: c.meetingUrl
-        };
+        const sessionIdsToMark = c.sessionIds || [c.sessionId];
+        for (let sId of sessionIdsToMark) {
+          dispatched[sId] = {
+            dispatchedAt: new Date().toISOString(),
+            teacherName: c.teacherName,
+            studentName: c.studentName,
+            subject: c.subject,
+            scheduledTime: c.startTime,
+            meetingUrl: c.meetingUrl,
+            groupClass: sessionIdsToMark.length > 1
+          };
+        }
         saveDispatchedSessions(dispatched);
 
         dispatchRecorderBot({
